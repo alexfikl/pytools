@@ -27,19 +27,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-
 import re
 from functools import reduce, wraps
 import operator
 import sys
 import logging
 from typing import (
-        cast, Any, Callable, Dict, Hashable, Iterable,
+        cast, Any, Callable, Dict, Generic, Hashable, Iterable,
         List, Optional, Set, Tuple, TypeVar)
 import builtins
 
+import math
 from sys import intern
 
+try:
+    from typing import ParamSpec, SupportsIndex
+except ImportError:
+    from typing_extensions import ParamSpec, SupportsIndex
 
 # These are deprecated and will go away in 2022.
 all = builtins.all
@@ -128,6 +132,7 @@ Name generation
 Deprecation Warnings
 --------------------
 
+.. autofunction:: deprecate_moved_function
 .. autofunction:: deprecate_keyword
 
 Functions for dealing with (large) auxiliary files
@@ -191,27 +196,56 @@ Type Variables Used
 
 T = TypeVar("T")
 F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
 
 # }}}
 
 
 # {{{ code maintenance
 
-class MovedFunctionDeprecationWrapper:
-    def __init__(self, f, deadline=None):
+class MovedFunctionDeprecationWrapper(Generic[P, T]):
+    def __init__(self,
+            f: Callable[P, T],
+            deadline: Optional[str] = None) -> None:
         if deadline is None:
             deadline = "the future"
 
         self.f = f
         self.deadline = deadline
+        self.__doc__ = f.__doc__
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
         from warnings import warn
         warn(f"This function is deprecated and will go away in {self.deadline}. "
             f"Use {self.f.__module__}.{self.f.__name__} instead.",
             DeprecationWarning, stacklevel=2)
 
         return self.f(*args, **kwargs)
+
+
+def deprecate_moved_function(
+        func: Callable[P, T],
+        deadline: Optional[str] = None) -> Callable[P, T]:
+    """Wrap a function to mark its current location as deprecated.
+
+    :arg func: function at its new location.
+    :arg deadline: expected time frame for the removal of the moved function.
+    """
+
+    from warnings import warn
+
+    if deadline is None:
+        deadline = "the future"
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        warn(f"This function is deprecated and will go away in {deadline}. "
+            f"Use {func.__module__}.{func.__name__} instead.",
+            DeprecationWarning, stacklevel=2)
+
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def deprecate_keyword(oldkey: str,
@@ -267,43 +301,83 @@ def delta(x, y):
         return 0
 
 
-def levi_civita(tup):
-    """Compute an entry of the Levi-Civita tensor for the indices *tuple*."""
+def levi_civita(tup: Tuple[int, ...]) -> int:
+    """Compute an entry of the Levi-Civita symbol for the indices *tuple*."""
     if len(tup) == 2:
         i, j = tup
-        return j-i
+        return j - i
     if len(tup) == 3:
         i, j, k = tup
-        return (j-i)*(k-i)*(k-j)/2
+        return (j-i) * (k-i) * (k-j) // 2
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Levi-Civita symbol in {len(tup)} dimensions")
 
 
-def factorial(n):
-    from operator import mul
-    assert n == int(n)
-    return reduce(mul, (i for i in range(1, n+1)), 1)
+factorial = deprecate_moved_function(math.factorial, deadline="2023")
 
+try:
+    # NOTE: only available in python >= 3.8
+    perm = deprecate_moved_function(math.perm, deadline="2023")
+except AttributeError:
+    def _unchecked_perm(n, k):
+        result = 1
+        while k:
+            result *= n
+            n -= 1
+            k -= 1
 
-def perm(n, k):
-    """Return P(n, k), the number of permutations of length k drawn from n
-    choices.
-    """
-    result = 1
-    assert k > 0
-    while k:
-        result *= n
-        n -= 1
-        k -= 1
+        return result
 
-    return result
+    def perm(n: SupportsIndex, k: Optional[SupportsIndex] = None) -> int:
+        """
+        :returns: :math:`P(n, k)`, the number of permutations of length :math:`k`
+            drawn from :math:`n` choices.
+        """
+        from warnings import warn
+        warn("This function is deprecated and will go away in 2023. "
+                "Use `math.perm` instead, which is available from Python 3.8.",
+                DeprecationWarning, stacklevel=2)
 
+        if k is None:
+            return math.factorial(n)
 
-def comb(n, k):
-    """Return C(n, k), the number of combinations (subsets)
-    of length k drawn from n choices.
-    """
-    return perm(n, k)//factorial(k)
+        import operator
+        n, k = operator.index(n), operator.index(k)
+        if k > n:
+            return 0
+
+        if k < 0:
+            raise ValueError("k must be a non-negative integer")
+
+        if n < 0:
+            raise ValueError("n must be a non-negative integer")
+
+        from numbers import Integral
+        if not isinstance(k, Integral):
+            raise TypeError(f"'{type(k).__name__}' object cannot be interpreted "
+                            "as an integer")
+
+        if not isinstance(n, Integral):
+            raise TypeError(f"'{type(n).__name__}' object cannot be interpreted "
+                            "as an integer")
+
+        return _unchecked_perm(n, k)
+
+try:
+    # NOTE: only available in python >= 3.8
+    comb = deprecate_moved_function(math.comb, deadline="2023")
+except AttributeError:
+    def comb(n: SupportsIndex, k: SupportsIndex) -> int:
+        """
+        :returns: :math:`C(n, k)`, the number of combinations (subsets)
+            of length :math:`k` drawn from :math:`n` choices.
+        """
+        from warnings import warn
+        warn("This function is deprecated and will go away in 2023. "
+                "Use `math.comb` instead, which is available from Python 3.8.",
+                DeprecationWarning, stacklevel=2)
+
+        return _unchecked_perm(n, k) // math.factorial(k)
 
 
 def norm_1(iterable):
@@ -1567,7 +1641,7 @@ def get_write_to_map_from_permutation(original, permuted):
 # {{{ graph algorithms
 
 from pytools.graph import a_star as a_star_moved
-a_star = MovedFunctionDeprecationWrapper(a_star_moved)
+a_star = deprecate_moved_function(a_star_moved)
 
 # }}}
 
@@ -2228,8 +2302,7 @@ def generate_numbered_unique_names(
         yield (num, name)
 
 
-generate_unique_possibilities = MovedFunctionDeprecationWrapper(
-        generate_unique_names)
+generate_unique_possibilities = deprecate_moved_function(generate_unique_names)
 
 
 class UniqueNameGenerator:
